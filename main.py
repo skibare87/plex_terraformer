@@ -30,7 +30,7 @@ def readConfig(path="config.json"):
     plex=PlexServer(plex_url, CONFIG["Plex_Token"])
     movies=plex.library.section(CONFIG["Movie_Library_Name"])
     tv=plex.library.section(CONFIG["TV_Library_Name"])
-    if 'VF_Mod' in CONFIG["Optimize"] and len(CONFIG["Optimize"]["VF_Mod"]) !=0:
+    if 'VF_Mod' in CONFIG["Optimize"] and len(CONFIG["Optimize"]["VF_Mod"]) != 0:
             vf_string=CONFIG["Optimize"]["VF_Mod"]+","+"scale=%d:%d"
         
 def dprint(*names):
@@ -82,14 +82,14 @@ def convert_video(input_file, output_file):
             OPTIMIZE_ITERATIONS=OPTIMIZE_ITERATIONS-1
         i=0
         while i < OPTIMIZE_ITERATIONS:
-            if 'action' in OPTIMIZE["OPTIMIZE_"+str(i)]:
+            if 'action' in CONFIG["Optimize"]["Optimize_"+str(i)]:
                 if safeCopy(input_file, output_file):
                     break
             else:
                 if probe["height"] is not None and probe["height"] > CONFIG["Max_Resolution"]:
-                    stream = ffmpeg.input(input_file,**probe["hwdecode"]).output(output_file, vf=vf_string % (width, height), **OPTIMIZE["OPTIMIZE_"+str(i)])
+                    stream = ffmpeg.input(input_file,**probe["hwdecode"]).output(output_file, vf=vf_string % (width, height), **CONFIG["Optimize"]["Optimize_"+str(i)])
                 else:
-                    stream = ffmpeg.input(input_file,**probe["hwdecode"]).output(output_file, **OPTIMIZE["OPTIMIZE_"+str(i)])
+                    stream = ffmpeg.input(input_file,**probe["hwdecode"]).output(output_file, **CONFIG["Optimize"]["Optimize_"+str(i)])
                 if safeRunStream(stream, output_file):
                     break
             i=i+1
@@ -110,14 +110,14 @@ def cat_videos(video_files, output_file):
         if 'VF_Mod' in CONFIG["Optimize"]:
             OPTIMIZE_ITERATIONS=OPTIMIZE_ITERATIONS-1
         while i < OPTIMIZE_ITERATIONS:
-            if 'action' in OPTIMIZE["OPTIMIZE_"+str(i)]:
+            if 'action' in CONFIG["Optimize"]["Optimize_"+str(i)]:
                 if safeCopy(input_streams, output_file):
                     break
             else:
                 if probe["height"] is not None and probe["height"] > CONFIG["Max_Resolution"]:
-                    stream=ffmpeg.concat(*input_streams, v=1, a=1,**probe["hwdecode"]).output(output_file, vf=vf_string % (width, height), **OPTIMIZE["OPTIMIZE_"+str(i)])
+                    stream=ffmpeg.concat(*input_streams, v=1, a=1,**probe["hwdecode"]).output(output_file, vf=vf_string % (width, height), **CONFIG["Optimize"]["Optimize_"+str(i)])
                 else:
-                    stream = ffmpeg.concat(*input_streams, v=1, a=1, **probe["hwdecode"]).output(output_file, **OPTIMIZE["OPTIMIZE_"+str(i)])
+                    stream = ffmpeg.concat(*input_streams, v=1, a=1, **probe["hwdecode"]).output(output_file, **CONFIG["Optimize"]["Optimize_"+str(i)])
                 if safeRunStream(stream, output_file):
                     break
             i=i+1
@@ -132,15 +132,16 @@ def safeCopy(input_file, output_file):
             while i < len(input_file):
                 safeCopy(input_file, output_file.replace("."+CONFIG["Output_Format"],"_part"+str(i+1)+"."+CONFIG["Output_Format"]))
             return True
-        elif os.path.isfile(output_file) and not os.path.isfile(output_file+".inprogress"):
-            dprint("Output File Exists: ", output_file)
-            dprint("Skipping")
-            return
-        else:
-            dprint("Detected incomplete copy: ",output_file,".inprogress")
+        elif os.path.isfile(output_file) and os.path.isfile(output_file+".inprogress"):
+            dprint("Detected incomplete copy: ",output_file+".inprogress")
             dprint("Removing files and retrying")
             delete(output_file)
             delete(output_file+".inprogress")
+        else:
+            dprint("Output File Exists: ", output_file)
+            dprint("Skipping")
+            return True
+            
         mkdir(output_file)
         touch(output_file+".inprogress")
         dprint("Strarting copy for: ",output_file,".inprogress")
