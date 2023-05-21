@@ -1,0 +1,57 @@
+{
+	"DEBUG": true,
+	"ENABLE_HW_DECODE": true,
+	"Max_Resolution": 1080,
+	"Optimize": {
+		"VF_Mod": "",
+		"Optimize_3": {
+			"action": "copy"
+		},
+		"Optimize_2": {
+			"c": "copy",
+			"crf": 25,
+			"preset": "medium"
+		},
+		"Optimize_1": {
+			"vcodec": "hevc_nvenc",
+			"acodec": "aac",
+			"crf": 25,
+			"preset": "medium"
+		},
+		"Optimize_0": {
+			"vcodec": "h264_nvenc",
+			"acodec": "aac",
+			"crf": 25,
+			"preset": "medium"
+		}
+	},
+	"Plex_Token": "",
+	"Plex_IP": "",
+	"Plex_Port": 32400,
+	"SSL": false,
+	"Local_Movie_Path": "/movies",
+	"Movie_Clean_Target": "/mnt/z/",
+	"Movie_Path_Translation": [
+		[
+			"/movies",
+			"/mnt/p/video"
+		]
+	],
+	"Movie_Library_Name": "Movies",
+	"Local_TV_Path": "/tv",
+	"TV_Clean_Target": "/mnt/q",
+	"TV_Path_Translation": [
+		[
+			"/tv",
+			"/mnt/q"
+		]
+	],
+	"TV_Library_Name": "TV Shows",
+	"Output_Format": "mkv",
+	"Features": {
+		"enable_tv": false,
+		"enable_movies": false,
+		"print_tv": false,
+		"print_movies": true
+	}
+}
