@@ -2,6 +2,7 @@
 import os
 import sys
 import time
+import shutil
 import requests
 from plexapi.server import PlexServer
 from plexapi.library import LibrarySection
@@ -9,7 +10,8 @@ import ffmpeg
 
 DEBUG=True
 MAX_RES=1080
-#OPTIMIZE={'vcodec':'libx264', 'acodec':'aac', 'crf':25, 'preset':'medium'}
+OPTIMIZE_FINAL={'c':'copy', 'crf':25, 'preset':'medium'}
+OPTIMIZE_ALT={'vcodec':'hevc_nvenc', 'acodec':'aac', 'crf':25, 'preset':'medium'}
 OPTIMIZE={'vcodec':'h264_nvenc', 'acodec':'aac', 'crf':25, 'preset':'medium'}
 
 MAX_CONV=10
@@ -23,7 +25,7 @@ plex=PlexServer("http://192.168.1.79:32400", PLEX_TOKEN)
 
 MOVIEDIR="/mnt/p/video/download"
 MCLEAN_DIR="/mnt/z/cleaned/movies"
-MTRANS=[["/data/video","/mnt/p/video"],["/data/kvideo","/mnt/p/remotefs/Konstantin/video"]]
+MTRANS=[["/data/video","/mnt/p/video"],["/data/kvideo","/mnt/p/remotefs/Konstantin/video"],["/flash/video","/mnt/z"]]
 movies=plex.library.section('Movies')
 
 
@@ -71,13 +73,28 @@ def convert_video(input_file, output_file):
             height = MAX_RES
             width = int(aspect_ratio * height)
             stream = ffmpeg.input(input_file,**hwdecode).output(output_file, vf='scale=%d:%d' % (width, height), **OPTIMIZE)
+            if not safeRunStream(stream, output_file):
+                stream = ffmpeg.input(input_file,**hwdecode).output(output_file, vf='format=yuv420p,scale=%d:%d' % (width, height), **OPTIMIZE_ALT)
+                if not safeRunStream(stream, output_file):
+                    stream = ffmpeg.input(input_file,**hwdecode).output(output_file, **OPTIMIZE_FINAL)
+                    if not safeRunStream(stream, output_file):
+                        safeCopy(input_file, output_file)
         else:
-            # Keep the original resolution if it's 1080p or below
-            stream = ffmpeg.input(input_file,**hwdecode).output(output_file, **OPTIMIZE)
-        safeRunStream(stream, output_file)
+            # Keep the original resolution if it's 1080p or below. Only Transcode if file is above limit
+            if os.path.getsize(input_file) / (1024 * 1024) > 1536:
+                stream = ffmpeg.input(input_file,**hwdecode).output(output_file, **OPTIMIZE)
+                if not safeRunStream(stream, output_file):
+                    stream = ffmpeg.input(input_file,**hwdecode).output(output_file, vf='format=yuv420p,scale=%d:%d' % (width, height), **OPTIMIZE_ALT)
+                    if not safeRunStream(stream, output_file):
+                        stream = ffmpeg.input(input_file,**hwdecode).output(output_file, **OPTIMIZE_FINAL)
+                        if not safeRunStream(stream, output_file):
+                            safeCopy(input_file, output_file)
+            else:
+                safeCopy(input_file, output_file)
     except Exception as err:
         print(f"Unexpected {err=}, {type(err)=}") 
 def cat_videos(video_files, output_file):
+    dprint("________________NEW_____________________")
     if len(video_files) < 1:
         return
     elif len(video_files) == 1:
@@ -103,34 +120,60 @@ def cat_videos(video_files, output_file):
             aspect_ratio = width / height
             height = MAX_RES
             width = int(aspect_ratio * height)
-            stream=ffmpeg.concat(*input_streams, v=1, a=1,**hwdecode).output(output_file, vf='scale=%d:%d' % (width, height), **OPTIMIZE)
-        else:
-            # Keep the original resolution if it's 1080p or below
-            stream=ffmpeg.concat(*input_streams, v=1, a=1, **hwdecode).output(output_file, vf='scale=%d:%d' % (width, height), **OPTIMIZE)
-        safeRunStream(stream,output_file)
+        stream=ffmpeg.concat(*input_streams, v=1, a=1,**hwdecode).output(output_file, vf='scale=%d:%d' % (width, height), **OPTIMIZE)
+        if not safeRunStream(stream,output_file):
+            stream=ffmpeg.concat(*input_streams, v=1, a=1,**hwdecode).output(output_file, vf='format=yuv420p,scale=%d:%d' % (width, height), **OPTIMIZE)
+            if not safeRunStream(stream,output_file):
+                stream=ffmpeg.concat(*input_streams, v=1, a=1,**hwdecode).output(output_file, vf='format=yuv420p,scale=%d:%d' % (width, height), **OPTIMIZE_ALT)
     except Exception as e:
         print('Error: ', e)
-def safeRunStream(stream, output_file):
-    if os.path.isfile(output_file) and not os.path.isfile(output_file+".inprogress"):
-        dprint("Output File Exists: ", output_file)
-        dprint("Skipping")
-        return
-    else:
-        dprint("Detected incomplete transcode: ",output_file,".inprogress")
-        dprint("Removing files and retrying")
-        delete(output_file)
+def safeCopy(input_file, output_file):
+    try:
+        if os.path.isfile(output_file) and not os.path.isfile(output_file+".inprogress"):
+            dprint("Output File Exists: ", output_file)
+            dprint("Skipping")
+            return
+        else:
+            dprint("Detected incomplete copy: ",output_file,".inprogress")
+            dprint("Removing files and retrying")
+            delete(output_file)
+            delete(output_file+".inprogress")
+        mkdir(output_file)
+        touch(output_file+".inprogress")
+        dprint("Strarting copy for: ",output_file,".inprogress")
+        copy(input_file,output_file)
         delete(output_file+".inprogress")
+        dprint("Completed transcode for: ",output_file)
+        return True
+    except Exception as e:
+        print('Error: ', e)
+        return False
+def safeRunStream(stream, output_file):
+    try:
+        if os.path.isfile(output_file) and not os.path.isfile(output_file+".inprogress"):
+            dprint("Output File Exists: ", output_file)
+            dprint("Skipping")
+            return
+        else:
+            dprint("Detected incomplete transcode: ",output_file,".inprogress")
+            dprint("Removing files and retrying")
+            delete(output_file)
+            delete(output_file+".inprogress")
 
-    mkdir(output_file)
-    touch(output_file+".inprogress")
-    dprint("Strarting transcode for: ",output_file,".inprogress")
-    stream.run()
-    delete(output_file)
-    dprint("Completed transcode for: ",output_file)
+        mkdir(output_file)
+        touch(output_file+".inprogress")
+        dprint("Strarting transcode for: ",output_file,".inprogress")
+        stream.run()
+        delete(output_file+".inprogress")
+        dprint("Completed transcode for: ",output_file)
+        return True
+    except Exception as e:
+        print('Error: ', e)
+        return False
 def cleanMovieLibrary():
     for video in movies.search():
         for media in video.media:
-            out=MCLEAN_DIR+"/"+video.title+" ("+str(video.year)+") "+str(media.videoResolution)+"p.mkv"         
+            out=MCLEAN_DIR+"/"+video.title+" ("+str(video.year)+")/"+video.title+" ("+str(video.year)+") "+str(media.videoResolution)+"p.mkv"         
             files=[]
             for part in media.parts:
                 fname=part.file
@@ -204,6 +247,14 @@ def delete(path):
         print(f"Permission denied.")
     except Exception as e:
         print(f"An error occurred: {e}")
+def copy(src_path, dest_path):
+    try:
+        shutil.copy2(src_path, dest_path)
+        dprint(f"File copied from {src_path} to {dest_path}")
+    except IOError as e:
+        dprint(f"Unable to copy file. {e}")
+    except Exception as e:
+        dprint(f"Unexpected error: {e}")
 cleanMovieLibrary()
 #get_video_codec('/mnt/p/video/Bollywood/3 Idiots (2009)/3 Idiots (2009) Bluray-1080p.mp4')
 #get_video_codec('/mnt/p/remotefs/Konstantin/video/downloadtv/2.Broke.Girls/2.Broke.Girls.2011.S05.1080p.AMZN.WEB-DL.x265.10bit.RZeroX/2 Broke Girls (2011) - S05E20 - And the Partnership Hits the Fan (1080p AMZN WEB-DL x265 RZeroX).mkv')
