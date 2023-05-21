@@ -7,37 +7,35 @@ import requests
 from plexapi.server import PlexServer
 from plexapi.library import LibrarySection
 import ffmpeg
+import json
 
-DEBUG=True
-MAX_RES=1080
-OPTIMIZE_FINAL={'c':'copy', 'crf':25, 'preset':'medium'}
-OPTIMIZE_ALT={'vcodec':'hevc_nvenc', 'acodec':'aac', 'crf':25, 'preset':'medium'}
-OPTIMIZE={'vcodec':'h264_nvenc', 'acodec':'aac', 'crf':25, 'preset':'medium'}
+movies=[]
+tv=[]
+config={}
+vf_string="scale=%d:%d"
 
-MAX_CONV=10
-LAST_CONVERTED=""
-
-PLEX_TOKEN="3h-5sBLp8emCqNK39wq5"
-PLEX_IP="192.168.1.79"
-PLEX_PORT="32400"
-plex=PlexServer("http://192.168.1.79:32400", PLEX_TOKEN)
-
-
-MOVIEDIR="/mnt/p/video/download"
-MCLEAN_DIR="/mnt/z/cleaned/movies"
-MTRANS=[["/data/video","/mnt/p/video"],["/data/kvideo","/mnt/p/remotefs/Konstantin/video"],["/flash/video","/mnt/z"]]
-movies=plex.library.section('Movies')
-
-
-TVDIR="/mnt/p/video/downloadtv"
-TCLEAN_DIR="/mnt/z/cleaned/tv"
-TTRANS=MTRANS
-tv=plex.library.section('TV Shows')
-
+def readConfig(path="config.json"):
+    global CONFIG
+    global movies
+    global tv
+    global vf_string
+    
+    with open(path, 'r') as infile:
+        CONFIG = json.load(infile)
+    plex_url=CONFIG["Plex_IP"]+":"+str(CONFIG["Plex_Port"])
+    if 'SSL' in CONFIG and CONFIG['SSL']:
+        plex_url="https://"+plex_url
+    else:
+        plex_url="http://"+plex_url
+    plex=PlexServer(plex_url, CONFIG["Plex_Token"])
+    movies=plex.library.section(CONFIG["Movie_Library_Name"])
+    tv=plex.library.section(CONFIG["TV_Library_Name"])
+    if 'VF_Mod' in CONFIG["Optimize"] and len(CONFIG["Optimize"]["VF_Mod"]) !=0:
+            vf_string=CONFIG["Optimize"]["VF_Mod"]+","+"scale=%d:%d"
+        
 def dprint(*names):
-    if DEBUG:
+    if CONFIG["DEBUG"]:
         print(*names)
-
 def get_video_codec(input_file):
     try:
         video_info = ffmpeg.probe(input_file)
@@ -50,86 +48,91 @@ def get_video_codec(input_file):
             return video_stream['codec_name']
     except Exception as e:
         print(f'Error: {e}')
-
-def convert_video(input_file, output_file):
+def probeVideoForResolution(input_file):
     try:
         probe = ffmpeg.probe(input_file)
         video_stream = next((stream for stream in probe['streams'] if stream['codec_type'] == 'video'), None)
         if video_stream is None:
             print('No video stream found')
             return
-        if 'h264' in video_stream['codec_name']:
+        if 'h264' in video_stream['codec_name'] and CONFIG["ENABLE_HW_DECODE"]:
             hwdecode={"hwaccel":'cuvid', 'c:v':'h264_cuvid'}
-        elif 'hevc' in  video_stream['codec_name']:
+        elif 'hevc' in  video_stream['codec_name'] and CONFIG["ENABLE_HW_DECODE"]:
             hwdecode={"hwaccel":'cuvid', 'c:v':'hevc_cuvid'}
         else:
             hwdecode={}
         width = int(video_stream['width'])
         height = int(video_stream['height'])
-
-        if height > MAX_RES:
-            # Downscale video to 1080p if above this resolution
-            aspect_ratio = width / height
-            height = MAX_RES
-            width = int(aspect_ratio * height)
-            stream = ffmpeg.input(input_file,**hwdecode).output(output_file, vf='scale=%d:%d' % (width, height), **OPTIMIZE)
-            if not safeRunStream(stream, output_file):
-                stream = ffmpeg.input(input_file,**hwdecode).output(output_file, vf='format=yuv420p,scale=%d:%d' % (width, height), **OPTIMIZE_ALT)
-                if not safeRunStream(stream, output_file):
-                    stream = ffmpeg.input(input_file,**hwdecode).output(output_file, **OPTIMIZE_FINAL)
-                    if not safeRunStream(stream, output_file):
-                        safeCopy(input_file, output_file)
-        else:
-            # Keep the original resolution if it's 1080p or below. Only Transcode if file is above limit
-            if os.path.getsize(input_file) / (1024 * 1024) > 1536:
-                stream = ffmpeg.input(input_file,**hwdecode).output(output_file, **OPTIMIZE)
-                if not safeRunStream(stream, output_file):
-                    stream = ffmpeg.input(input_file,**hwdecode).output(output_file, vf='format=yuv420p,scale=%d:%d' % (width, height), **OPTIMIZE_ALT)
-                    if not safeRunStream(stream, output_file):
-                        stream = ffmpeg.input(input_file,**hwdecode).output(output_file, **OPTIMIZE_FINAL)
-                        if not safeRunStream(stream, output_file):
-                            safeCopy(input_file, output_file)
+        
+        # Downscale video to 1080p if above this resolution
+        aspect_ratio = width / height
+        height = CONFIG["Max_Resolution"]
+        width = int(aspect_ratio * height)
+        
+        return {"width":width,"height":height,"aspect":"aspect_ratio","hwdecode":hwdecode}
+    except Exception as err:
+        print(f"Unexpected {err=}, {type(err)=}")
+        return {"width":None,"height":None,"aspect":None,"hwdecode":{}}
+    
+def convert_video(input_file, output_file):
+    try:
+        probe=probeVideoForResolution(input_file)
+        OPTIMIZE_ITERATIONS=len(CONFIG["Optimize"])
+        if 'VF_Mod' in CONFIG["Optimize"]:
+            OPTIMIZE_ITERATIONS=OPTIMIZE_ITERATIONS-1
+        i=0
+        while i < OPTIMIZE_ITERATIONS:
+            if 'action' in OPTIMIZE["OPTIMIZE_"+str(i)]:
+                if safeCopy(input_file, output_file):
+                    break
             else:
-                safeCopy(input_file, output_file)
+                if probe["height"] is not None and probe["height"] > CONFIG["Max_Resolution"]:
+                    stream = ffmpeg.input(input_file,**probe["hwdecode"]).output(output_file, vf=vf_string % (width, height), **OPTIMIZE["OPTIMIZE_"+str(i)])
+                else:
+                    stream = ffmpeg.input(input_file,**probe["hwdecode"]).output(output_file, **OPTIMIZE["OPTIMIZE_"+str(i)])
+                if safeRunStream(stream, output_file):
+                    break
+            i=i+1
+        
     except Exception as err:
         print(f"Unexpected {err=}, {type(err)=}") 
 def cat_videos(video_files, output_file):
-    dprint("________________NEW_____________________")
     if len(video_files) < 1:
-        return
+        return False
     elif len(video_files) == 1:
         return convert_video(video_files[0], output_file)
     try:
         input_streams = [ffmpeg.input(file) for file in video_files]
-        probe = ffmpeg.probe(video_files[0])
-        video_stream = next((stream for stream in probe['streams'] if stream['codec_type'] == 'video'), None)
-        if video_stream is None:
-            print('No video stream found')
-            return
-        if 'h264' in video_stream['codec_name']:
-            hwdecode={"hwaccel":'cuvid', 'c:v':'h264_cuvid'}
-        elif 'hevc' in  video_stream['codec_name']:
-            hwdecode={"hwaccel":'cuvid', 'c:v':'hevc_cuvid'}
-        else:
-            hwdecode={}
-        width = int(video_files[0]['width'])
-        height = int(video_files[0]['height'])
+        probe = probeVideoForResolution(video_files[0])
+        
+        i=0
+        OPTIMIZE_ITERATIONS=len(CONFIG["Optimize"])
+        if 'VF_Mod' in CONFIG["Optimize"]:
+            OPTIMIZE_ITERATIONS=OPTIMIZE_ITERATIONS-1
+        while i < OPTIMIZE_ITERATIONS:
+            if 'action' in OPTIMIZE["OPTIMIZE_"+str(i)]:
+                if safeCopy(input_streams, output_file):
+                    break
+            else:
+                if probe["height"] is not None and probe["height"] > CONFIG["Max_Resolution"]:
+                    stream=ffmpeg.concat(*input_streams, v=1, a=1,**probe["hwdecode"]).output(output_file, vf=vf_string % (width, height), **OPTIMIZE["OPTIMIZE_"+str(i)])
+                else:
+                    stream = ffmpeg.concat(*input_streams, v=1, a=1, **probe["hwdecode"]).output(output_file, **OPTIMIZE["OPTIMIZE_"+str(i)])
+                if safeRunStream(stream, output_file):
+                    break
+            i=i+1
 
-        if height > MAX_RES:
-            # Downscale video to 1080p if above this resolution
-            aspect_ratio = width / height
-            height = MAX_RES
-            width = int(aspect_ratio * height)
-        stream=ffmpeg.concat(*input_streams, v=1, a=1,**hwdecode).output(output_file, vf='scale=%d:%d' % (width, height), **OPTIMIZE)
-        if not safeRunStream(stream,output_file):
-            stream=ffmpeg.concat(*input_streams, v=1, a=1,**hwdecode).output(output_file, vf='format=yuv420p,scale=%d:%d' % (width, height), **OPTIMIZE)
-            if not safeRunStream(stream,output_file):
-                stream=ffmpeg.concat(*input_streams, v=1, a=1,**hwdecode).output(output_file, vf='format=yuv420p,scale=%d:%d' % (width, height), **OPTIMIZE_ALT)
+        
     except Exception as e:
         print('Error: ', e)
 def safeCopy(input_file, output_file):
     try:
-        if os.path.isfile(output_file) and not os.path.isfile(output_file+".inprogress"):
+        if not isinstance(input_file, str):
+            i=0
+            while i < len(input_file):
+                safeCopy(input_file, output_file.replace("."+CONFIG["Output_Format"],"_part"+str(i+1)+"."+CONFIG["Output_Format"]))
+            return True
+        elif os.path.isfile(output_file) and not os.path.isfile(output_file+".inprogress"):
             dprint("Output File Exists: ", output_file)
             dprint("Skipping")
             return
@@ -148,7 +151,11 @@ def safeCopy(input_file, output_file):
     except Exception as e:
         print('Error: ', e)
         return False
-def safeRunStream(stream, output_file):
+def safeRunStream(stream, output_file, input_file=None):
+    if stream is None and input_file is not None:
+        return safeCopy(input_file, output_file)
+    elif stream is None and input_file is None:
+        return false
     try:
         if os.path.isfile(output_file) and not os.path.isfile(output_file+".inprogress"):
             dprint("Output File Exists: ", output_file)
@@ -173,11 +180,15 @@ def safeRunStream(stream, output_file):
 def cleanMovieLibrary():
     for video in movies.search():
         for media in video.media:
-            out=MCLEAN_DIR+"/"+video.title+" ("+str(video.year)+")/"+video.title+" ("+str(video.year)+") "+str(media.videoResolution)+"p.mkv"         
+            try:
+                mres=str(int(media.videoResolution))+"p"
+            except Exception as e:
+                mres=str(media.videoResolution)
+            out=CONFIG["Movie_Clean_Target"]+"/"+video.title+" ("+str(video.year)+")/"+video.title+" ("+str(video.year)+") "+mres+"."+CONFIG["Output_Format"]         
             files=[]
             for part in media.parts:
                 fname=part.file
-                for pathfilter in MTRANS:
+                for pathfilter in CONFIG["Movie_Path_Translation"]:
                     fname=fname.replace(pathfilter[0], pathfilter[1])
                 files.append(fname)
             dprint(files, "->", out)
@@ -197,11 +208,15 @@ def cleanTVLibrary():
                         snum=str(season.seasonNumber).zfill(3)
                     else:
                         snum=str(season.seasonNumber).zfill(2)
-                    out=TCLEAN_DIR+"/"+show.title+" ("+str(show.year)+") "+str(media.videoResolution)+"p/Season "+str(season.seasonNumber)+"/S"+snum+"E"+epnum+" "+ep.title+".mkv"
+                    try:
+                        mres=str(int(media.videoResolution))+"p"
+                    except Exception:
+                        mres=str(media.videoResolution)
+                    out=CONFIG["TV_Clean_Target"]+"/"+show.title+" ("+str(show.year)+") "+mres+"/Season "+str(season.seasonNumber)+"/S"+snum+"E"+epnum+" "+ep.title+"."+CONFIG["Output_Format"]
                     files=[]
                     for part in media.parts:
                         fname=part.file
-                        for pathfilter in TTRANS:
+                        for pathfilter in CONFIG["TV_Path_Translation"]:
                             fname=fname.replace(pathfilter[0], pathfilter[1])
                         files.append(fname)
                     dprint(files, "->", out)
@@ -213,7 +228,7 @@ def printMovieLibrary():
         for media in video.media:
             dprint(video.title,' - ',video.year,' (',media.videoResolution,')')
             for part in media.parts:
-                dprint("    ",part.file.replace(MTRANS[0][0], MTRANS[0][1],1))
+                dprint("    ",part.file.replace(CONFIG["Movie_Path_Translation"][0][0], CONFIG["Movie_Path_Translation"][0][1],1))
 def printTVLibrary():
     for show in tv.searchShows():
         dprint(show.title, " - ", show.year,' (', show.seasonCount,')')
@@ -224,7 +239,7 @@ def printTVLibrary():
                 for media in ep.media:
                     for part in media.parts:
                         dprint('    ',ep.episodeNumber,' - ',ep.title,' (',media.videoResolution,')')
-                        dprint('      ',part.file.replace(TTRANS[0][0], TTRANS[0][1],1))
+                        dprint('      ',part.file.replace(CONFIG["TV_Path_Translation"][0][0], CONFIG["TV_Path_Translation"][0][1],1))
 
 def mkdir(path):
     # os.path.dirname gets the directory path from the full path
@@ -255,10 +270,13 @@ def copy(src_path, dest_path):
         dprint(f"Unable to copy file. {e}")
     except Exception as e:
         dprint(f"Unexpected error: {e}")
-cleanMovieLibrary()
-#get_video_codec('/mnt/p/video/Bollywood/3 Idiots (2009)/3 Idiots (2009) Bluray-1080p.mp4')
-#get_video_codec('/mnt/p/remotefs/Konstantin/video/downloadtv/2.Broke.Girls/2.Broke.Girls.2011.S05.1080p.AMZN.WEB-DL.x265.10bit.RZeroX/2 Broke Girls (2011) - S05E20 - And the Partnership Hits the Fan (1080p AMZN WEB-DL x265 RZeroX).mkv')
-#convert_video('/mnt/p/remotefs/Konstantin/video/downloadtv/2.Broke.Girls/2.Broke.Girls.2011.S05.1080p.AMZN.WEB-DL.x265.10bit.RZeroX/2 Broke Girls (2011) - S05E20 - And the Partnership Hits the Fan (1080p AMZN WEB-DL x265 RZeroX).mkv','/mnt/c/Users/matt/output.mkv')
-#printMovieLibrary()
-#printTVLibrary()
 
+readConfig()
+if CONFIG["Features"]["print_movies"]:
+    printMovieLibrary()
+elif CONFIG["Features"]["print_tv"]:
+    printTVLibrary()
+elif CONFIG["Features"]["enable_movies"]:
+    cleanMovieLibrary()
+elif CONFIG["Features"]["enable_tv"]:
+    cleanTVLibrary()
