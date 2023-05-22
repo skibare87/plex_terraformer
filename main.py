@@ -130,7 +130,10 @@ def safeCopy(input_file, output_file):
         if not isinstance(input_file, str):
             i=0
             while i < len(input_file):
-                safeCopy(input_file, output_file.replace("."+CONFIG["Output_Format"],"_part"+str(i+1)+"."+CONFIG["Output_Format"]))
+                partnum=(i+1)
+                dprint("Copying Part ",partnum)
+                safeCopy(input_file[i], output_file.replace("."+CONFIG["Output_Format"],"_part"+str(partnum)+"."+CONFIG["Output_Format"]))
+                i=i+1
             return True
         elif os.path.isfile(output_file) and os.path.isfile(output_file+".inprogress"):
             dprint("Detected incomplete copy: ",output_file+".inprogress")
