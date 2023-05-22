@@ -140,7 +140,7 @@ def safeCopy(input_file, output_file):
             dprint("Removing files and retrying")
             delete(output_file)
             delete(output_file+".inprogress")
-        else:
+        elif os.path.isfile(output_file):
             dprint("Output File Exists: ", output_file)
             dprint("Skipping")
             return True
@@ -161,15 +161,15 @@ def safeRunStream(stream, output_file, input_file=None):
     elif stream is None and input_file is None:
         return false
     try:
-        if os.path.isfile(output_file) and not os.path.isfile(output_file+".inprogress"):
-            dprint("Output File Exists: ", output_file)
-            dprint("Skipping")
-            return
-        else:
+        if os.path.isfile(output_file) and os.path.isfile(output_file+".inprogress"):
             dprint("Detected incomplete transcode: ",output_file,".inprogress")
             dprint("Removing files and retrying")
             delete(output_file)
             delete(output_file+".inprogress")
+        elif os.path.isfile(output_file):
+            dprint("Output File Exists: ", output_file)
+            dprint("Skipping")
+            return True
 
         mkdir(output_file)
         touch(output_file+".inprogress")
